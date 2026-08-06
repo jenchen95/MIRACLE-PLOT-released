@@ -1,0 +1,12 @@
+src/critical_minerals/.env
+src/critical_minerals/__pycache__
+.aider*
+data/data_raw/miracle_oscar
+data_old/
+testpic
+prism/Cu_C2.prism
+data/data_output
+data/.stfolder
+data/.stfolder.removed-20251211-231317
+data/data_raw/miracle_oscar_Oct2025
+testpicOct2025
