@@ -1,24 +1,26 @@
-"""Slide 8: supply_expansion.json, the succession of binding minerals along fig4.py's relaxation path.
+"""Slide 8: supply_expansion.json, fig4.py's panels (co-limiting metals along the supply-optimisation sequence).
 
     uv run python src/overshoot2026/export_supply_expansion.py [DATA_DIR] [--out DECK_DATA_DIR]
-        [--pathway "COFFEE 1.1|EN_NPi2020_400f_lowBECCS"] [--strategy bau] [--steps 12]
+        [--pathway "COFFEE 1.1|EN_NPi2020_400f_lowBECCS"]
 
 fig4_pipeline() is fig4.py's main() for one pathway, line for line: elasticity_evolve
 (iter_element == 1) spread onto a common grid of `n_uniform` optimisation steps; abatement
 gain over the emissions gap (co2_add_reg, 5-year snapshots) gives the cumulative gap
 closure (%, and in Gt against the annual gap); supply increments over the 2025-2100 basis
-supply of COFFEE 1.1|EN_NPi2020_400f_lowBECCS give the required annual supply growth
-rate. Its output is fig4.py's companion_metals_gap_closure.csv for that pathway.
+supply of COFFEE 1.1|EN_NPi2020_400f_lowBECCS give the cumulative supply increase (% of
+baseline) and the required annual supply growth rate.
 
-The deck draws 10-12 steps, while fig4.py has one per optimisation step (about 300).
-So the optimisation steps up to the last one fig4.py plots (cumulative abatement < 100%)
-are cut into `--steps` equal blocks; per block:
-- binding: the mineral with the largest abatement gain in the block (the one whose
-  relaxation closes most of the gap there);
-- gap_closure_cum: fig4.py's "Cumulative gap closure (%)" at the block's last step
-  (gap_closure_gt_cum: the same in Gt CO2);
-- supply_growth: fig4.py's "Required annual supply growth rate (%)" of that mineral at
-  the block's last step (basis_growth: the same before any relaxation, step 0).
+Per strategy of fig4.py's main-text grid (MAIN_TEXT_STRATEGIES), as plot_stacked() draws it:
+- x: cumulative gap closure, Gt CO2 (cumsum_abate / 1000), one value per optimisation step
+  that fig4.py keeps (cumulative abatement < 100%), with the origin prepended;
+- y: per element, the cumulative supply increase in % of the baseline supply
+  (ratio_cumsum_increment, forward-filled), stacked in fig4.py's order (first step at
+  which the element is relaxed, then name); colours are fig4.py's elem_color;
+- inset: gap closure in % of the Reference gap against the optimisation step:
+  (cumsum_abate + Reference gap - strategy gap) / Reference gap;
+- growth: fig4.py's "Required annual supply growth rate (%)" per element, at the origin
+  (basis rate) and at every step, for the tooltips and the slide's text.
+The summary printed at the end gives the numbers behind the slide's three points.
 """
 
 import argparse
@@ -46,7 +48,11 @@ ELEMENT_NAMES = {
 
 
 def fig4_pipeline(data_dir, path_abb):
-    """fig4.py main() for one path_abb: returns (export_df incl. step 0, evolve_sample, baseline_gap)."""
+    """fig4.py main() for one path_abb.
+
+    Returns (export_df incl. step 0, evolve_sample, baseline_gap, evolve_cumulative with rank, emis_gap by strategy):
+    export_df is companion_metals_gap_closure.csv, evolve_cumulative is fig4.py's cum_data.
+    """
     ev_file = data_dir / "elasticity_evolve.parquet"
     co2_file = data_dir / "co2_add_reg.parquet"
     evolve = (
@@ -188,6 +194,17 @@ def fig4_pipeline(data_dir, path_abb):
                  on=elements, variable_name="element", value_name="ratio_cumsum_increment")
         .filter(pl.col("ratio_cumsum_increment").is_not_null())
         .sort(["path_abb", "strategy", "uniform_id"])
+    )
+    element_rank = (
+        evolve_cumulative.group_by(["path_abb", "strategy", "element"])
+        .agg(pl.min(["uniform_id"]))
+        .sort(["path_abb", "strategy", "uniform_id", "element"])
+        .with_columns(rank=pl.col(["uniform_id"]).rank("ordinal").over(["path_abb", "strategy"], order_by=pl.col("element")))
+    )
+    evolve_cumulative = (
+        evolve_cumulative.join(element_rank, on=["path_abb", "strategy", "element", "uniform_id"], how="left")
+        .sort(["path_abb", "strategy", "element", "uniform_id"])
+        .with_columns(rank=pl.col("rank").forward_fill().over(["path_abb", "strategy", "element"]))
         .filter(pl.col("ratio_cumsum_abate") < 100)
     )
     evolve_filled = (
@@ -234,72 +251,111 @@ def fig4_pipeline(data_dir, path_abb):
         )
     )
     export = pl.concat([step_zero, export_df]).sort(["Pathway", "Strategy", "Optimization step", "Element"])
-    return export, evolve_sample, baseline_gap
+    emis_gap_dict = {row["strategy"]: row["emis_gap_annual"] for row in emis_gap_annual.iter_rows(named=True)}
+    return export, evolve_sample, baseline_gap, evolve_cumulative, emis_gap_dict
+
+
+# fig4.py NATURE_PALETTE and MAIN_TEXT_STRATEGIES (2 x 3 grid order)
+NATURE_PALETTE = ["#332288", "#117733", "#44AA99", "#88CCEE", "#DDCC77", "#CC6677", "#AA4499", "#882255", "#6699CC",
+                  "#999933", "#AA7744", "#4477AA", "#228833", "#EE6677", "#6655AA", "#994455", "#557744", "#77AADD",
+                  "#CC8866", "#8866AA"]
+PANELS = [  # (deck id, model code, fig4.py title)
+    ("bau", "bau_bau_bau_recycl_nosub", "Reference"),
+    ("circular", "bau_llt_mir_recych_nosub", "Circular"),
+    ("substitution", "bau_bau_bau_recycl_sub", "Substitution"),
+    ("allocation", "allo_bau_bau_recycl_nosub", "Global Allocation"),
+    ("allosub", "allo_bau_bau_recycl_sub", "Global Allocation+Substitution"),
+    ("allin", "allo_llt_mir_recych_sub", "All-in"),
+]
+
+
+def element_colors(data_dir) -> dict:
+    """fig4.py elem_color: palette by the sorted elements of COFFEE 1.1, four strategies."""
+    ref = (
+        pl.scan_parquet(data_dir / "elasticity_evolve.parquet")
+        .filter(pl.col("path_abb") == BASIS_PATH)
+        .filter(pl.col("strategy").is_in(BAU_STRATEGIES + ["allo_bau_bau_recycl_nosub", "allo_llt_mir_recych_nosub"]))
+        .filter(pl.col("iter_element") == 1)
+        .select("element").unique().collect().to_series().sort().to_list()
+    )
+    return {e: NATURE_PALETTE[i % len(NATURE_PALETTE)] for i, e in enumerate(ref)}
+
+
+def panel(cum, export, code, baseline_gap, strategy_gap):
+    """One fig4.py panel: plot_stacked() data, the inset curve and the growth rates."""
+    data = cum.filter(pl.col("strategy") == code)
+    order = (data.group_by("element").agg(pl.col("rank").min()).sort("rank", "element")["element"].to_list())
+    wide = (
+        data.sort(["uniform_id", "rank", "element"])
+        .pivot(values="ratio_cumsum_increment", index=["uniform_id", "cumsum_abate"], on="element", maintain_order=True)
+        .fill_null(0)
+        .sort("uniform_id")
+    )
+    steps = wide["uniform_id"].to_list()
+    delta = baseline_gap - strategy_gap
+    ex = export.filter(pl.col("Strategy") == code)
+    rate = {(row["Optimization step"], row["Element"]): row["Required annual supply growth rate (%)"]
+            for row in ex.iter_rows(named=True)}
+    return {
+        "steps": [0] + steps,
+        "x": [0.0] + [r(v / 1000, 2) for v in wide["cumsum_abate"]],
+        "closure": [r(delta / baseline_gap * 100, 2)]
+                   + [r((v + delta) / baseline_gap * 100, 2) for v in wide["cumsum_abate"]],
+        "elements": order,
+        "y": {e: [0.0] + [r(v, 3) for v in wide[e]] for e in order},
+        "growth": {e: [r(rate.get((st, e)), 2) for st in [0] + steps] for e in order},
+        "gap_gt": r(strategy_gap / 1000, 1),
+    }
+
+
+def summary(sid, title, p):
+    """The numbers behind the slide's points (printed, for checking against the manuscript)."""
+    n = len(p["x"]) - 1
+    first = p["elements"][0]
+    alone = max(i for i in range(n + 1)                              # last step at which only the first element has grown
+                if all(p["y"][e][i] == 0 for e in p["elements"][1:]))
+    top = sorted(((p["growth"][e][-1], e) for e in p["elements"]), reverse=True)[:4]
+    print(f"  {title:31s} {len(p['elements']):2d} elements {' '.join(p['elements'])}")
+    print(f"    {n} optimisation steps; closure {p['closure'][0]:.1f}% -> {p['closure'][-1]:.1f}% "
+          f"(+{p['x'][-1]:.0f} Gt of its own {p['gap_gt']:.0f} Gt gap)")
+    print(f"    {first} alone up to step {p['steps'][alone]}: {p['x'][alone]:.1f} Gt, closure {p['closure'][alone]:.1f}%, "
+          f"{first} growth {p['growth'][first][alone]}%/yr (basis {p['growth'][first][0]})")
+    print("    final growth: " + ", ".join(f"{e} {g:.2f}" for g, e in top) + " %/yr;  final increase: "
+          + ", ".join(f"{e} {p['y'][e][-1]:.1f}%" for e in sorted(p["elements"], key=lambda e: -p["y"][e][-1])[:4]))
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("data_dir", nargs="?", type=Path, default=DEFAULT_DATA_DIR)
-    p.add_argument("--out", type=Path, default=DEFAULT_OUT_DIR)
-    p.add_argument("--pathway", default=BASIS_PATH, help="path_abb (default: fig4.py's C2 reference pathway)")
-    p.add_argument("--strategy", default="bau", choices=list(STRATEGIES), help="deck strategy id")
-    p.add_argument("--steps", type=int, default=12, help="number of steps drawn on the slide")
-    args = p.parse_args()
-    code = STRATEGIES[args.strategy]
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("data_dir", nargs="?", type=Path, default=DEFAULT_DATA_DIR)
+    ap.add_argument("--out", type=Path, default=DEFAULT_OUT_DIR)
+    ap.add_argument("--pathway", default=BASIS_PATH, help="path_abb (default: fig4.py's C2 illustrative pathway)")
+    args = ap.parse_args()
 
-    export, sample, baseline_gap = fig4_pipeline(args.data_dir, args.pathway)
-    ex = export.filter(pl.col("Strategy") == code)
-    sm = sample.filter(pl.col("strategy") == code)
-    last = int(ex["Optimization step"].max())            # last step fig4.py plots (abatement < 100%)
-    n = min(args.steps, last)
-    bounds = [round(last * (i + 1) / n) for i in range(n)]
-    starts = [1] + [b + 1 for b in bounds[:-1]]
+    export, _, baseline_gap, cum, gaps = fig4_pipeline(args.data_dir, args.pathway)
+    colors = element_colors(args.data_dir)
+    panels = []
+    print(f"  {args.pathway}: Reference gap {baseline_gap / 1000:.1f} Gt CO2")
+    for sid, code, title in PANELS:
+        p = panel(cum, export, code, baseline_gap, gaps[code])
+        summary(sid, title, p)
+        panels.append({"id": sid, "code": code, "title": title, **p})
+    used = sorted({e for p in panels for e in p["elements"]})
 
-    per_step = ex.group_by("Optimization step").agg(
-        pl.col("Cumulative gap closure (%)").first(), pl.col("Cumulative gap closure (Gt CO2)").first(),
-        pl.col("Emissions gap (Gt CO2)").first(),
-    )
-    rate = {(row["Optimization step"], row["Element"]): row["Required annual supply growth rate (%)"]
-            for row in ex.iter_rows(named=True)}
-    steps, used = [], []
-    for i, (a, b) in enumerate(zip(starts, bounds)):
-        blk = (sm.filter(pl.col("uniform_id").is_between(a, b))
-               .group_by("element").agg(pl.col("abate_gain").sum(), pl.col("uniform_supply_increment").sum())
-               .sort("abate_gain", descending=True))
-        el = blk["element"][0]
-        row = per_step.filter(pl.col("Optimization step") == b).row(0, named=True)
-        steps.append({
-            "step": i + 1,
-            "opt_steps": [a, b],
-            "binding": el,
-            "binding_share": r(blk["abate_gain"][0] / blk["abate_gain"].sum() * 100, 1),
-            "gap_closure_cum": r(row["Cumulative gap closure (%)"], 2),
-            "gap_closure_gt_cum": r(row["Cumulative gap closure (Gt CO2)"], 2),
-            "supply_growth": r(rate.get((b, el)), 2),
-            "basis_growth": r(rate.get((0, el)), 2),
-        })
-        if el not in used:
-            used.append(el)
-
-    gap_gt = ex["Emissions gap (Gt CO2)"].drop_nulls()[0]
     data = {
         "pathway": args.pathway,
-        "strategy": args.strategy,
-        "units": {"gap_closure_cum": "% of the emissions gap", "gap_closure_gt_cum": "Gt CO₂",
-                  "supply_growth": "% per year"},
-        "emissions_gap_gt": r(gap_gt, 1),
-        "optimisation_steps": last,
-        "source": "MIRACLE elasticity_evolve and co2_add_reg; logic of MIRACLE-PLOT fig4.py, "
-                  f"{last} optimisation steps grouped into {n}",
-        "minerals": [{"id": e, "label": ELEMENT_NAMES.get(e, e)} for e in used],
-        "steps": steps,
+        "pathway_label": "COFFEE 1.1 EN_NPi2020_400f_lowBECCS, the AR6 C2 illustrative mitigation pathway"
+                         if args.pathway == BASIS_PATH else args.pathway,
+        "units": {"x": "Gt CO₂", "y": "% of baseline supply", "closure": "% of the Reference gap",
+                  "growth": "% per year"},
+        "x_label": "Cumulative emissions-gap closure 2025–2100 (Gt CO₂)",
+        "y_label": "Cumulative increase in metal supply (% of baseline)",
+        "inset_label": "Gap closure (%) by optimisation step",
+        "reference_gap_gt": r(baseline_gap / 1000, 1),
+        "source": "MIRACLE elasticity_evolve and co2_add_reg; logic of MIRACLE-PLOT fig4.py (main-text panels)",
+        "elements": [{"id": e, "label": ELEMENT_NAMES.get(e, e), "color": colors.get(e, "#999999")} for e in used],
+        "panels": panels,
     }
     write_json(args.out, "supply_expansion", data)
-    print(f"  {args.pathway} / {code}: gap {gap_gt:.1f} Gt CO2, {last} optimisation steps -> {n}")
-    for s in steps:
-        print(f"  step {s['step']:2d} [{s['opt_steps'][0]:3d}-{s['opt_steps'][1]:3d}] {s['binding']:3s} "
-              f"({s['binding_share']:5.1f}% of gain)  closed {s['gap_closure_cum']:6.2f}% = {s['gap_closure_gt_cum']:7.2f} Gt"
-              f"  growth {s['supply_growth']} %/yr (basis {s['basis_growth']})")
 
 
 if __name__ == "__main__":

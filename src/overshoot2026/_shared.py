@@ -1,4 +1,4 @@
-"""Shared settings of the overshoot-2026 deck exports (slides 6-8).
+"""Shared settings of the overshoot-2026 deck exports (slides 4 and 6-8).
 
 Each export_<chart>.py reads the MIRACLE-OSCAR outputs (read-only) and writes one
 JSON into the deck's data folder; the schemas are in that folder's README.md.
@@ -18,6 +18,7 @@ STRATEGIES = {
     "circular": "bau_llt_mir_recych_nosub",
     "substitution": "bau_bau_bau_recycl_sub",
     "allocation": "allo_bau_bau_recycl_nosub",
+    "allocirc": "allo_llt_mir_recych_nosub",   # fig1.py "Circular + Global Allocation"
     "allin": "allo_llt_mir_recych_sub",
 }
 CODE_TO_ID = {code: sid for sid, code in STRATEGIES.items()}
