@@ -7,7 +7,11 @@ copied to a temporary folder and the copy is opened read-only with the duckdb CL
 
 Only the open-licence sources are shown (seeds.ref_source_licences = 'open'); the
 licensed and private tables of the database stay off the slide. Per commodity and stage:
-- mine and refined/smelter production: production_mine, production_refined (2000 on);
+- mine and refined/smelter production: production_mine, production_refined (2000 on) and
+  production_history (BGS World Mineral Statistics 1970-1999, the same BGS tables), so the
+  countries and the years of a cell cover 1970 to the latest year. The history holds former
+  states (Soviet Union, Yugoslavia, Czechoslovakia, the two Germanys) as entities of their
+  own: they count as producers, and totals.historical_entities says how many they are;
 - trade: CEPII BACI bilateral flows (v_trade_by_stage) and BGS imports/exports (trade_bgs);
 - reserves: USGS MCS reserves (reserves);
 the countries with a value, the years and the sources. `reliability` is the cross-source
@@ -51,6 +55,7 @@ GROUPS = [  # display order of the commodities
 CELLS = """
 with x as (
   select commodity_id, 'mine' as stage, source, iso3, year from production_mine where value_t is not null
+  union all select commodity_id, stage, source, iso3, year from production_history where value_t is not null
   union all select commodity_id, 'refined', source, iso3, year from production_refined where value_t is not null
   union all select commodity_id, 'reserves', source, iso3, reference_year from reserves where value_t is not null
   union all select commodity_id, 'trade', 'baci', exporter_iso3, year from v_trade_by_stage
@@ -63,14 +68,20 @@ from x where iso3 is not null group by grouping sets ((commodity_id, stage, sour
 ) order by all
 """
 COUNTRIES = """
+with recent as (select iso3 from production_mine where value_t is not null and iso3 is not null
+                union select iso3 from production_refined where value_t is not null and iso3 is not null),
+     hist as (select distinct iso3, entity_type from production_history where value_t is not null and iso3 is not null)
 select
-  (select count(distinct iso3) from (select iso3 from production_mine where value_t is not null
-     union select iso3 from production_refined where value_t is not null)) as production_countries,
+  (select count(distinct iso3) from (select iso3 from recent union select iso3 from hist)) as production_countries,
+  (select count(distinct iso3) from recent) as production_countries_2000_on,
+  (select count(*) from hist where entity_type = 'historical_entity' and iso3 not in (select iso3 from recent)) as historical_entities,
+  (select string_agg(iso3, ' ' order by iso3) from hist where iso3 not in (select iso3 from recent)) as history_only,
   (select count(distinct iso3) from (select exporter_iso3 as iso3 from trade union select importer_iso3 from trade)) as trade_economies,
   (select count(*) from trade) as trade_flows,
   (select min(year) from trade) as trade_y0, (select max(year) from trade) as trade_y1,
   (select count(*) from trade_bgs) as trade_bgs_rows,
-  (select min(year) from production_history) as history_y0,
+  (select min(year) from production_history where value_t is not null) as history_y0,
+  (select max(year) from production_history where value_t is not null) as history_y1,
   (select count(*) from production_mine) + (select count(*) from production_refined) as production_rows
 """
 LICENCES = "select source, licence from seeds.ref_source_licences"
@@ -154,9 +165,13 @@ def main() -> None:
         "commodities": commodities,
         "totals": {
             "commodities": len(commodities),
-            "production_countries": int(totals["production_countries"]),
+            "production_countries": int(totals["production_countries"]),          # 1970 to the latest year
+            "production_countries_2000_on": int(totals["production_countries_2000_on"]),
+            "historical_entities": int(totals["historical_entities"]),            # former states, among production_countries
+            "history_only": totals["history_only"].split(),                        # producers in 1970-1999 only
             "production_years": [min(prod_years), max(prod_years)],
             "production_history_from": int(totals["history_y0"]),
+            "production_history_to": int(totals["history_y1"]),
             "trade_flows": int(totals["trade_flows"]),
             "trade_years": [int(totals["trade_y0"]), int(totals["trade_y1"])],
             "trade_economies": int(totals["trade_economies"]),
@@ -173,7 +188,9 @@ def main() -> None:
     write_json(args.out, "data_coverage", data)
     t = data["totals"]
     print(f"  {t['commodities']} commodities, {t['production_countries']} producing countries "
-          f"{t['production_years'][0]}-{t['production_years'][1]} (history from {t['production_history_from']}), "
+          f"{t['production_years'][0]}-{t['production_years'][1]} ({t['production_countries_2000_on']} from 2000 on; "
+          f"{t['production_history_from']}-{t['production_history_to']} only: {' '.join(t['history_only'])}, "
+          f"{t['historical_entities']} of them former states), "
           f"{t['trade_flows']:,} BACI flows {t['trade_years'][0]}-{t['trade_years'][1]}, {t['trade_economies']} economies")
     for s in sources:
         print(f"  {s['short']:10s} {s['commodities']:2d} commodities  {s['stages']}")

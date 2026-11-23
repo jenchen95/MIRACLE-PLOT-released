@@ -21,6 +21,10 @@ Per strategy of fig4.py's main-text grid (MAIN_TEXT_STRATEGIES), as plot_stacked
 - growth: fig4.py's "Required annual supply growth rate (%)" per element, at the origin
   (basis rate) and at every step (the basis rate until the element is first relaxed), for
   the slide's readout, table and text;
+- entered: per element, the optimisation step at which its cumulative supply increase first
+  exceeds zero (before rounding; some increases are far below the 0.001% that `y` keeps).
+  The bundle size the slide counts, "metals expanded so far", is the number of elements
+  entered by the step shown: the same series as the stack, the same rule for every strategy;
 - binding / binding_gain: per step, the elements whose supply is relaxed at that step and
   the abatement each of them gains (Gt CO2), largest gain first. fig4.py's step grid puts
   the relaxations of every year at one step, so a step can have several elements; the
@@ -306,6 +310,11 @@ def panel(cum, export, sample, code, baseline_gap, strategy_gap):
     for row in (sample.filter(pl.col("strategy") == code, pl.col("uniform_supply_increment") > 0)
                 .sort("abate_gain", "element", descending=[True, False]).iter_rows(named=True)):
         relaxed.setdefault(row["uniform_id"], []).append((row["element"], row["abate_gain"]))
+    entered = {}                                         # element -> first step with a cumulative increase > 0
+    for e in order:
+        first = wide.filter(pl.col(e) > 0)["uniform_id"]
+        entered[e] = int(first[0]) if len(first) else None
+
     def growth(e):
         """The required growth rate at every step; until an element is first relaxed it keeps its basis rate (step 0)."""
         out, last = [], None
@@ -322,6 +331,7 @@ def panel(cum, export, sample, code, baseline_gap, strategy_gap):
         "elements": order,
         "y": {e: [0.0] + [r(v, 3) for v in wide[e]] for e in order},
         "growth": {e: growth(e) for e in order},
+        "entered": entered,
         "binding": [[]] + [[e for e, _ in relaxed.get(st, [])] for st in steps],
         "binding_gain": [[]] + [[r(g / 1000, 3) for _, g in relaxed.get(st, [])] for st in steps],
         "gap_gt": r(strategy_gap / 1000, 1),
@@ -340,6 +350,11 @@ def summary(sid, title, p):
           f"(+{p['x'][-1]:.0f} Gt of its own {p['gap_gt']:.0f} Gt gap)")
     print(f"    {first} alone up to step {p['steps'][alone]}: {p['x'][alone]:.1f} Gt, closure {p['closure'][alone]:.1f}%, "
           f"{first} growth {p['growth'][first][alone]}%/yr (basis {p['growth'][first][0]})")
+    size = lambda i: sum(1 for e in p["elements"] if p["entered"][e] is not None and p["entered"][e] <= p["steps"][i])
+    at100 = next((i for i in range(n + 1) if p["x"][i] >= 100), None)
+    print(f"    bundle: {size(n)} metals at the last step"
+          + (f", {size(at100)} at {p['x'][at100]:.0f} Gt" if at100 is not None else "") + "; entries (step: Gt): "
+          + ", ".join(f"{e} {s}: {p['x'][p['steps'].index(s)]:.1f}" for e, s in sorted(p["entered"].items(), key=lambda t: (t[1] is None, t[1], t[0])) if s is not None))
     print("    final growth: " + ", ".join(f"{e} {g:.2f}" for g, e in top) + " %/yr;  final increase: "
           + ", ".join(f"{e} {p['y'][e][-1]:.1f}%" for e in sorted(p["elements"], key=lambda e: -p["y"][e][-1])[:4]))
 
