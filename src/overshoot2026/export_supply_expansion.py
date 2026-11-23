@@ -19,7 +19,12 @@ Per strategy of fig4.py's main-text grid (MAIN_TEXT_STRATEGIES), as plot_stacked
 - inset: gap closure in % of the Reference gap against the optimisation step:
   (cumsum_abate + Reference gap - strategy gap) / Reference gap;
 - growth: fig4.py's "Required annual supply growth rate (%)" per element, at the origin
-  (basis rate) and at every step, for the tooltips and the slide's text.
+  (basis rate) and at every step (the basis rate until the element is first relaxed), for
+  the slide's readout, table and text;
+- binding / binding_gain: per step, the elements whose supply is relaxed at that step and
+  the abatement each of them gains (Gt CO2), largest gain first. fig4.py's step grid puts
+  the relaxations of every year at one step, so a step can have several elements; the
+  first is the one the slide's readout names as binding.
 The summary printed at the end gives the numbers behind the slide's three points.
 """
 
@@ -282,8 +287,8 @@ def element_colors(data_dir) -> dict:
     return {e: NATURE_PALETTE[i % len(NATURE_PALETTE)] for i, e in enumerate(ref)}
 
 
-def panel(cum, export, code, baseline_gap, strategy_gap):
-    """One fig4.py panel: plot_stacked() data, the inset curve and the growth rates."""
+def panel(cum, export, sample, code, baseline_gap, strategy_gap):
+    """One fig4.py panel: plot_stacked() data, the inset curve, the growth rates and the binding elements."""
     data = cum.filter(pl.col("strategy") == code)
     order = (data.group_by("element").agg(pl.col("rank").min()).sort("rank", "element")["element"].to_list())
     wide = (
@@ -297,6 +302,18 @@ def panel(cum, export, code, baseline_gap, strategy_gap):
     ex = export.filter(pl.col("Strategy") == code)
     rate = {(row["Optimization step"], row["Element"]): row["Required annual supply growth rate (%)"]
             for row in ex.iter_rows(named=True)}
+    relaxed = {}                                         # step -> [(element, abatement gain in Mt)], largest gain first
+    for row in (sample.filter(pl.col("strategy") == code, pl.col("uniform_supply_increment") > 0)
+                .sort("abate_gain", "element", descending=[True, False]).iter_rows(named=True)):
+        relaxed.setdefault(row["uniform_id"], []).append((row["element"], row["abate_gain"]))
+    def growth(e):
+        """The required growth rate at every step; until an element is first relaxed it keeps its basis rate (step 0)."""
+        out, last = [], None
+        for st in [0] + steps:
+            last = rate.get((st, e), last) if rate.get((st, e)) is not None else last
+            out.append(r(last, 2))
+        return out
+
     return {
         "steps": [0] + steps,
         "x": [0.0] + [r(v / 1000, 2) for v in wide["cumsum_abate"]],
@@ -304,7 +321,9 @@ def panel(cum, export, code, baseline_gap, strategy_gap):
                    + [r((v + delta) / baseline_gap * 100, 2) for v in wide["cumsum_abate"]],
         "elements": order,
         "y": {e: [0.0] + [r(v, 3) for v in wide[e]] for e in order},
-        "growth": {e: [r(rate.get((st, e)), 2) for st in [0] + steps] for e in order},
+        "growth": {e: growth(e) for e in order},
+        "binding": [[]] + [[e for e, _ in relaxed.get(st, [])] for st in steps],
+        "binding_gain": [[]] + [[r(g / 1000, 3) for _, g in relaxed.get(st, [])] for st in steps],
         "gap_gt": r(strategy_gap / 1000, 1),
     }
 
@@ -332,12 +351,12 @@ def main() -> None:
     ap.add_argument("--pathway", default=BASIS_PATH, help="path_abb (default: fig4.py's C2 illustrative pathway)")
     args = ap.parse_args()
 
-    export, _, baseline_gap, cum, gaps = fig4_pipeline(args.data_dir, args.pathway)
+    export, sample, baseline_gap, cum, gaps = fig4_pipeline(args.data_dir, args.pathway)
     colors = element_colors(args.data_dir)
     panels = []
     print(f"  {args.pathway}: Reference gap {baseline_gap / 1000:.1f} Gt CO2")
     for sid, code, title in PANELS:
-        p = panel(cum, export, code, baseline_gap, gaps[code])
+        p = panel(cum, export, sample, code, baseline_gap, gaps[code])
         summary(sid, title, p)
         panels.append({"id": sid, "code": code, "title": title, **p})
     used = sorted({e for p in panels for e in p["elements"]})

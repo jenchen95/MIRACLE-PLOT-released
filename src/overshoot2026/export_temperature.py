@@ -13,6 +13,16 @@ Band (not drawn by fig1.py's time series): the median over the same pathways of 
 OSCAR-ensemble p33 and p66 of each pathway (measures "p33"/"p66" of the same files).
 `stats_2100` repeats fig1.py's right panel: percentiles over pathways in 2100 and the
 median of the paired (strategy - Ideal) difference.
+
+`delta_to_ideal` holds the numbers the slide writes next to the legend, per strategy:
+- dT: 2100 warming above Ideal, as tab_warming_add_global_stats.py (diff_median): the
+  median over the C2 pathways of each pathway's (strategy - Ideal) difference. The
+  difference of the two medians (the gap between the drawn lines) is kept as dT_of_medians.
+- dCO2: additional CO2 2025-2100 in Gt, from co2_add_reg.parquet as
+  tab_emissions_add_global_stats.py: per pathway the sum over regions and years (Mt -> Gt),
+  then the median over the C2 pathways (category.csv). That script sums every year of the
+  file (2021-2100); the slide's label says 2025-2100, so dCO2 sums 2025-2100 and
+  dCO2_2021_2100 keeps the table's number.
 """
 
 import numpy as np
@@ -21,6 +31,39 @@ import polars as pl
 from _shared import CATEGORY, CODE_TO_ID, STRATEGIES, parse_args, r, write_json
 
 MEASURES = ["mean", "p33", "p66"]
+CO2_YEARS = (2025, 2100)
+
+
+def additional_co2(data_dir, pathways: set) -> dict:
+    """Median over `pathways` of each pathway's additional CO2 (Gt), by model strategy code."""
+    category = (
+        pl.read_csv(data_dir / "category.csv")
+        .with_columns(path_abb=pl.concat_str("model", "scenario", separator="|"))
+        .filter(pl.col("category") == CATEGORY)
+    )
+    c2 = set(category["path_abb"].to_list())
+    if c2 != pathways:
+        print(f"  note: category.csv has {len(c2)} {CATEGORY} pathways, the temperature files {len(pathways)}; "
+              f"using the {len(c2 & pathways)} in both")
+    co2 = (
+        pl.scan_parquet(data_dir / "co2_add_reg.parquet")
+        .filter(pl.col("strategy").is_in(list(STRATEGIES.values())), pl.col("path_abb").is_in(sorted(c2 & pathways)))
+        .group_by("path_abb", "strategy")
+        .agg(
+            (pl.col("Emissions").filter(pl.col("year").is_between(*CO2_YEARS)).sum() / 1000).alias("window"),   # Mt -> Gt
+            (pl.col("Emissions").sum() / 1000).alias("all_years"),
+            pl.col("year").min().alias("y0"), pl.col("year").max().alias("y1"),
+        )
+        .collect()
+    )
+    out = {}
+    for code in STRATEGIES.values():
+        v = co2.filter(pl.col("strategy") == code)
+        if v.is_empty():
+            continue
+        out[code] = {"window": v["window"].median(), "all_years": v["all_years"].median(), "n": v.height,
+                     "years": [int(v["y0"].min()), int(v["y1"].max())]}
+    return out
 
 
 def main() -> None:
@@ -95,6 +138,33 @@ def main() -> None:
             entry["median_diff_to_ideal"] = r(diff.to_series().median())
         stats_2100[sid] = entry
 
+    # the gap to Ideal the slide writes next to each strategy: 2100 warming and cumulative CO2
+    pathways = {f"{m}|{s}" for m, s in ideal.select("model", "scenario").iter_rows()}
+    co2 = additional_co2(d, pathways)
+    file_years = next(iter(co2.values()))["years"] if co2 else list(CO2_YEARS)
+    deltas = {}
+    for code in STRATEGIES.values():
+        sid = CODE_TO_ID[code]
+        if sid not in stats_2100 or code not in co2:
+            continue
+        deltas[sid] = {
+            "dT": stats_2100[sid]["median_diff_to_ideal"],
+            "dT_of_medians": r(stats_2100[sid]["median"] - stats_2100["ideal"]["median"]),
+            "dCO2": r(co2[code]["window"], 1),
+            f"dCO2_{file_years[0]}_{file_years[1]}": r(co2[code]["all_years"], 1),
+            "n_pathways": co2[code]["n"],
+        }
+    delta_to_ideal = {
+        "temperature": {"year": 2100, "unit": "°C",
+                        "statistic": f"median over the {CATEGORY} pathways of each pathway's 2100 warming minus its Ideal "
+                                     "(MIRACLE-PLOT tab_warming_add_global_stats.py, diff_median)"},
+        "co2": {"years": list(CO2_YEARS), "unit": "Gt CO₂",
+                "statistic": f"median over the {CATEGORY} pathways of each pathway's additional CO₂ (co2_add_reg), summed over "
+                             f"the ten regions and {CO2_YEARS[0]}–{CO2_YEARS[1]} (MIRACLE-PLOT tab_emissions_add_global_stats.py, "
+                             f"which sums {file_years[0]}–{file_years[1]})"},
+        "values": deltas,
+    }
+
     data = {
         "unit": "°C above 1850–1900",
         "band": "33rd–66th percentile of the climate ensemble (median over pathways)",
@@ -106,11 +176,16 @@ def main() -> None:
         "history": history,
         "paths": paths,
         "stats_2100": stats_2100,
+        "delta_to_ideal": delta_to_ideal,
     }
     write_json(args.out, "temperature", data)
     for sid, s in stats_2100.items():
         print(f"  2100 {sid:13s} median {s['median']:.2f} °C  IQR {s['p25']:.2f}-{s['p75']:.2f}"
               + (f"  vs Ideal +{s['median_diff_to_ideal']:.3f}" if "median_diff_to_ideal" in s else ""))
+    for sid, v in deltas.items():
+        print(f"  delta {sid:13s} dT +{v['dT']:.3f} °C (of medians +{v['dT_of_medians']:.3f})  "
+              f"dCO2 {CO2_YEARS[0]}-{CO2_YEARS[1]} +{v['dCO2']:.1f} Gt  ({file_years[0]}-{file_years[1]}: "
+              f"+{v[f'dCO2_{file_years[0]}_{file_years[1]}']:.1f} Gt, n={v['n_pathways']})")
 
 
 if __name__ == "__main__":
