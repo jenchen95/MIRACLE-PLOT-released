@@ -4,7 +4,9 @@
 
 As fig1.py:
 - history: dtg_weighted_hist_2000mc (measure "mean") up to the first scenario year;
-- Ideal: dtg_weighted_scen_2000mc; strategies: dtg_weighted_cf_2000mc_category*_scen_all;
+- Ideal: dtg_weighted_scen_2000mc; strategies: dtg_weighted_cf_2000mc_category*_scen_all,
+  every strategy of _shared.STRATEGIES, among them Circular + Global Allocation
+  (allo_llt_mir_recych_nosub: free trade x circular x no substitution);
 - category C2, measure "mean"; the line is the median over the C2 pathways of each year;
 - everything relative to the 1850-1900 mean of the history.
 Band (not drawn by fig1.py's time series): the median over the same pathways of the

@@ -255,16 +255,17 @@ def fig4_pipeline(data_dir, path_abb):
     return export, evolve_sample, baseline_gap, evolve_cumulative, emis_gap_dict
 
 
-# fig4.py NATURE_PALETTE and MAIN_TEXT_STRATEGIES (2 x 3 grid order)
+# fig4.py NATURE_PALETTE and MAIN_TEXT_STRATEGIES; PANELS in the order slide 8 steps through them
+# (fig4.py's 2 x 3 grid has Circular second; its panels are the same six)
 NATURE_PALETTE = ["#332288", "#117733", "#44AA99", "#88CCEE", "#DDCC77", "#CC6677", "#AA4499", "#882255", "#6699CC",
                   "#999933", "#AA7744", "#4477AA", "#228833", "#EE6677", "#6655AA", "#994455", "#557744", "#77AADD",
                   "#CC8866", "#8866AA"]
 PANELS = [  # (deck id, model code, fig4.py title)
     ("bau", "bau_bau_bau_recycl_nosub", "Reference"),
-    ("circular", "bau_llt_mir_recych_nosub", "Circular"),
     ("substitution", "bau_bau_bau_recycl_sub", "Substitution"),
     ("allocation", "allo_bau_bau_recycl_nosub", "Global Allocation"),
     ("allosub", "allo_bau_bau_recycl_sub", "Global Allocation+Substitution"),
+    ("circular", "bau_llt_mir_recych_nosub", "Circular"),
     ("allin", "allo_llt_mir_recych_sub", "All-in"),
 ]
 

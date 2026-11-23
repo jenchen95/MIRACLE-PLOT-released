@@ -12,13 +12,17 @@ from pathlib import Path
 DEFAULT_DATA_DIR = Path("/Users/huangc/Code/MIRACLE-OSCAR-released/data/data_raw/miracle_oscar")
 DEFAULT_OUT_DIR = Path("/Users/huangc/Code/miracle-overshoot-talk/miracle-overshoot-assets/data")
 
-# Deck strategy id -> model strategy code (fig1.py / fig2.py / fig3.py / fig4.py)
+# Deck strategy id -> model strategy code (fig1.py / fig2.py / fig3.py / fig4.py), in the order the
+# deck shows them (slides 5-7): Substitution first, Circular next to Circular + Global Allocation.
+# The deck labels "bau" as "Reference", as the manuscript does.
 STRATEGIES = {
     "bau": "bau_bau_bau_recycl_nosub",
-    "circular": "bau_llt_mir_recych_nosub",
     "substitution": "bau_bau_bau_recycl_sub",
     "allocation": "allo_bau_bau_recycl_nosub",
-    "allocirc": "allo_llt_mir_recych_nosub",   # fig1.py "Circular + Global Allocation"
+    "circular": "bau_llt_mir_recych_nosub",
+    # free trade (allo) x circular (llt_mir_recych) x no substitution: fig1.py "Circular + Global
+    # Allocation"; critical_minerals seeds/strategy_abbr.csv row 6, "Global Allocation+Circular"
+    "allocirc": "allo_llt_mir_recych_nosub",
     "allin": "allo_llt_mir_recych_sub",
 }
 CODE_TO_ID = {code: sid for sid, code in STRATEGIES.items()}
